@@ -1,7 +1,7 @@
 #!/bin/bash
 CONTAINER_IMAGE="ghcr.io/oddstr13/docker-tizen-webos-sdk:webos-only"
 
-MY=$(realpath "$(dirname $0)")
+MY=$(realpath "$(dirname "$0")")
 
 function ct {
   # The volume mount flag should be a lower case z.
