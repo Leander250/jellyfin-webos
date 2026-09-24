@@ -29,3 +29,5 @@ Thumbs.db
 node_modules/
 build/
 yarn.lock
+
+.idea
