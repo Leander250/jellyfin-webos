@@ -10,7 +10,8 @@
     "launch": "ares-launch org.jellyfin.webos",
     "manifest": "node tools/gen-manifest.js build/org.jellyfin.webos.manifest.json",
     "version": "node tools/sync-version.js && git add frontend/appinfo.json",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "search-devices": "ares-setup-device --search"
   },
   "author": "Jellyfin contributors",
   "license": "MPL-2.0",
