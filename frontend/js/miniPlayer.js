@@ -71,6 +71,7 @@
     }
 
     function closeMiniPlayer() {
+        var wasOpen = !!miniVideo;
         if (miniVideo) {
             miniVideo.pause();
             miniVideo.removeAttribute('src');
@@ -82,6 +83,11 @@
         }
         if (miniPlayer) {
             miniPlayer.style.display = 'none';
+        }
+        if (wasOpen) {
+            var closedEvent = document.createEvent('Event');
+            closedEvent.initEvent('webos-mini-player-closed', false, false);
+            document.dispatchEvent(closedEvent);
         }
     }
 
@@ -158,6 +164,9 @@
         miniVideo = nextVideo;
         player.insertBefore(nextVideo, player.firstChild);
         player.style.display = 'block';
+        var openedEvent = document.createEvent('Event');
+        openedEvent.initEvent('webos-mini-player-opened', false, false);
+        document.dispatchEvent(openedEvent);
         report('Back: opening stream from ' + Math.floor(startSeconds) + 's');
         // Jellyfin closes its own video in response to Back. Start the new
         // stream after that player has released the TV's video decoder.
