@@ -220,6 +220,14 @@
     }
 
     function selectCard(card) {
+        var miniPlayer = document.getElementById('webos-mini-player');
+        if (miniPlayer && miniPlayer.style.display !== 'none') {
+            if (activeCard) {
+                stopPreview();
+            }
+            return;
+        }
+
         if (!card) {
             if (activeCard) {
                 stopPreview();

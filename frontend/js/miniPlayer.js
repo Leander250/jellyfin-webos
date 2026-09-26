@@ -3,11 +3,7 @@
     'use strict';
 
     var miniPlayer = null;
-    var activeVideo = null;
-    var originalParent = null;
-    var originalNextSibling = null;
-    var wasInPlayerView = false;
-    var restoreTimer = null;
+    var miniVideo = null;
     var lastStatus = '';
     var lastUrl = window.location.href;
 
@@ -20,8 +16,17 @@
         window.top.postMessage({ type: 'videoPreviewStatus', data: 'Mini-player: ' + message }, '*');
     }
 
+    function playerVideo() {
+        var videos = document.querySelectorAll('video');
+        for (var i = 0; i < videos.length; i++) {
+            if (videos[i] !== miniVideo && !videos[i].classList.contains('webos-video-preview-player')) {
+                return videos[i];
+            }
+        }
+        return null;
+    }
+
     function isPlayerView() {
-        // Jellyfin versions and playback modes use different player wrappers.
         var players = document.querySelectorAll('.videoPlayerContainer, .videoOsdBottom, .videoOsdTop');
         for (var i = 0; i < players.length; i++) {
             if (players[i].offsetWidth && players[i].offsetHeight) {
@@ -29,6 +34,55 @@
             }
         }
         return false;
+    }
+
+    function queryValue(url, name) {
+        var match = new RegExp('[?&#]' + name + '=([^&#]+)', 'i').exec(url || '');
+        return match ? decodeURIComponent(match[1]) : null;
+    }
+
+    function getItemId(video) {
+        var source = video.currentSrc || video.src || '';
+        var match = /\/Videos\/([^/?#]+)/i.exec(source);
+        return queryValue(window.location.href, 'itemId') ||
+            queryValue(window.location.href, 'id') ||
+            (match ? decodeURIComponent(match[1]) : null);
+    }
+
+    function getToken(video) {
+        var sourceToken = queryValue(video.currentSrc || video.src, 'api_key');
+        if (sourceToken) {
+            return sourceToken;
+        }
+        try {
+            var credentials = JSON.parse(localStorage.getItem('jellyfin_credentials') || '{}');
+            var servers = credentials.Servers || [];
+            for (var i = 0; i < servers.length; i++) {
+                if (servers[i].AccessToken &&
+                    (!servers[i].ManualAddress || servers[i].ManualAddress === window.location.origin)) {
+                    return servers[i].AccessToken;
+                }
+            }
+            return servers.length ? servers[0].AccessToken : null;
+        } catch (error) {
+            report('could not read Jellyfin credentials');
+            return null;
+        }
+    }
+
+    function closeMiniPlayer() {
+        if (miniVideo) {
+            miniVideo.pause();
+            miniVideo.removeAttribute('src');
+            miniVideo.load();
+            if (miniVideo.parentNode) {
+                miniVideo.parentNode.removeChild(miniVideo);
+            }
+            miniVideo = null;
+        }
+        if (miniPlayer) {
+            miniPlayer.style.display = 'none';
+        }
     }
 
     function createMiniPlayer() {
@@ -46,12 +100,7 @@
         closeButton.textContent = '×';
         closeButton.style.cssText = 'position:absolute;top:4px;right:6px;z-index:2;width:42px;height:42px;border:0;border-radius:50%;background:rgba(0,0,0,.75);color:#fff;font-size:30px;line-height:38px;cursor:pointer;';
         closeButton.onclick = function () {
-            if (activeVideo) {
-                activeVideo.pause();
-            }
-            restoreVideo();
-            miniPlayer.style.display = 'none';
-            activeVideo = null;
+            closeMiniPlayer();
             report('closed by user');
         };
 
@@ -60,112 +109,97 @@
         return miniPlayer;
     }
 
-    function rememberVideo(video) {
-        if (!video || video === activeVideo) {
-            return;
-        }
-        activeVideo = video;
-        originalParent = video.parentNode;
-        originalNextSibling = video.nextSibling;
-        report('video found; paused=' + video.paused + '; duration=' + video.duration);
-    }
-
-    function showMiniPlayer(video) {
-        rememberVideo(video);
-        if (!activeVideo || activeVideo.paused || activeVideo.ended) {
-            report('cannot open: video is paused or ended');
+    function openMiniPlayer(video) {
+        if (!video || video.paused || video.ended) {
+            report('Back: no playing video to continue');
             return;
         }
 
+        var itemId = getItemId(video);
+        var token = getToken(video);
+        if (!itemId || !token) {
+            report('Back: cannot start stream; itemId=' + !!itemId + '; token=' + !!token);
+            return;
+        }
+
+        var startSeconds = isFinite(video.currentTime) ? Math.max(0, video.currentTime) : 0;
+        var startTicks = Math.floor(startSeconds * 10000000);
+        var streamUrl = '/Videos/' + encodeURIComponent(itemId) + '/stream.mp4' +
+            '?VideoCodec=h264&AudioCodec=aac&MaxWidth=640&api_key=' + encodeURIComponent(token) +
+            '&StartTimeTicks=' + startTicks;
+
+        closeMiniPlayer();
         var player = createMiniPlayer();
-        player.style.display = 'block';
-        player.insertBefore(activeVideo, player.firstChild);
-        activeVideo.style.setProperty('width', '100%', 'important');
-        activeVideo.style.setProperty('height', '100%', 'important');
-        activeVideo.style.setProperty('object-fit', 'contain', 'important');
-        activeVideo.style.setProperty('position', 'absolute', 'important');
-        activeVideo.style.setProperty('inset', '0', 'important');
-        activeVideo.style.setProperty('z-index', '1', 'important');
-        report('opened; playback continues in top-right mini-player');
-    }
-
-    function restoreVideo() {
-        if (!activeVideo || !originalParent || !originalParent.isConnected) {
-            report('cannot restore video to its original view');
-            return;
-        }
-
-        activeVideo.style.removeProperty('width');
-        activeVideo.style.removeProperty('height');
-        activeVideo.style.removeProperty('object-fit');
-        activeVideo.style.removeProperty('position');
-        activeVideo.style.removeProperty('inset');
-        activeVideo.style.removeProperty('z-index');
-        if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
-            originalParent.insertBefore(activeVideo, originalNextSibling);
-        } else {
-            originalParent.appendChild(activeVideo);
-        }
-        if (miniPlayer) {
-            miniPlayer.style.display = 'none';
-        }
-        activeVideo = null;
-        originalParent = null;
-        originalNextSibling = null;
-        report('returned to playback view');
-    }
-
-    function checkPlaybackView() {
-        var inPlayerView = isPlayerView();
-        var video = document.querySelector('video');
-        var playingVideo = video && !video.paused && !video.ended ? video : null;
-
-        if (window.location.href !== lastUrl) {
-            lastUrl = window.location.href;
-            report('URL changed; playerView=' + inPlayerView + '; video=' + !!video + '; playing=' + !!playingVideo);
-        }
-
-        if (inPlayerView && playingVideo) {
-            rememberVideo(playingVideo);
-            wasInPlayerView = true;
-            if (restoreTimer) {
-                clearTimeout(restoreTimer);
-                restoreTimer = null;
+        var nextVideo = document.createElement('video');
+        nextVideo.className = 'webos-mini-player-video';
+        nextVideo.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;';
+        nextVideo.setAttribute('playsinline', '');
+        nextVideo.setAttribute('webkit-playsinline', '');
+        nextVideo.autoplay = false;
+        nextVideo.controls = true;
+        nextVideo.src = streamUrl;
+        nextVideo.onplaying = function () {
+            if (miniVideo === nextVideo) {
+                report('playing mini-player from ' + Math.floor(startSeconds) + 's');
             }
-            return;
-        }
+        };
+        nextVideo.onerror = function () {
+            if (miniVideo === nextVideo) {
+                report('mini-player stream failed; media error=' + (nextVideo.error ? nextVideo.error.code : 'unknown'));
+            }
+        };
+        nextVideo.onended = function () {
+            if (miniVideo === nextVideo) {
+                closeMiniPlayer();
+                report('video ended');
+            }
+        };
 
-        if (wasInPlayerView && !inPlayerView && activeVideo && !activeVideo.paused && !activeVideo.ended) {
-            wasInPlayerView = false;
-            report('left player view; opening mini-player');
-            restoreTimer = setTimeout(function () {
-                restoreTimer = null;
-                if (!isPlayerView() && activeVideo && !activeVideo.paused && !activeVideo.ended) {
-                    showMiniPlayer(activeVideo);
-                } else {
-                    report('player view returned or video stopped before opening');
-                }
-            }, 150);
-        }
-
-        if (inPlayerView && miniPlayer && miniPlayer.style.display !== 'none') {
-            restoreVideo();
-            wasInPlayerView = true;
-        }
+        miniVideo = nextVideo;
+        player.insertBefore(nextVideo, player.firstChild);
+        player.style.display = 'block';
+        report('Back: opening stream from ' + Math.floor(startSeconds) + 's');
+        // Jellyfin closes its own video in response to Back. Start the new
+        // stream after that player has released the TV's video decoder.
+        setTimeout(function () {
+            if (miniVideo !== nextVideo) {
+                return;
+            }
+            var result = nextVideo.play();
+            if (result && typeof result.catch === 'function') {
+                result.catch(function (error) {
+                    if (miniVideo === nextVideo) {
+                        report('mini-player play failed: ' + error.name);
+                    }
+                });
+            }
+        }, 350);
     }
 
     document.addEventListener('keydown', function (event) {
         if (event.keyCode === 461 || event.key === 'Back') {
-            var video = document.querySelector('video');
+            var video = playerVideo();
             report('Back key received; playerView=' + isPlayerView() + '; video=' + !!video + '; playing=' + !!(video && !video.paused));
-            setTimeout(checkPlaybackView, 300);
+            if (isPlayerView()) {
+                openMiniPlayer(video);
+            }
         }
     }, true);
-    document.addEventListener('play', checkPlaybackView, true);
-    document.addEventListener('pause', checkPlaybackView, true);
-    window.addEventListener('hashchange', checkPlaybackView);
-    window.addEventListener('popstate', checkPlaybackView);
-    new MutationObserver(checkPlaybackView).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(checkPlaybackView, 500);
-    report('script loaded; playerView=' + isPlayerView() + '; video=' + !!document.querySelector('video'));
+
+    function checkNavigation() {
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            var video = playerVideo();
+            report('URL changed; playerView=' + isPlayerView() + '; video=' + !!video + '; mini=' + !!miniVideo);
+            if (isPlayerView() && miniVideo) {
+                closeMiniPlayer();
+                report('returned to playback view');
+            }
+        }
+    }
+
+    window.addEventListener('hashchange', checkNavigation);
+    window.addEventListener('popstate', checkNavigation);
+    setInterval(checkNavigation, 500);
+    report('script loaded; playerView=' + isPlayerView() + '; video=' + !!playerVideo());
 })();
