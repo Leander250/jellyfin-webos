@@ -1,6 +1,6 @@
 {
   "name": "org.jellyfin.webos",
-  "version": "1.2.2014",
+  "version": "1.2.2015",
   "description": "Jellyfin WebOS client",
   "scripts": {
     "check": "ares-package --check",

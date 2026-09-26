@@ -6,6 +6,9 @@
     var miniVideo = null;
     var miniItemId = null;
     var miniToken = null;
+    var miniOriginalUrl = null;
+    var miniMediaSourceId = null;
+    var miniSourceMode = 'mp4';
     var miniDurationSeconds = NaN;
     var miniMetadataRequest = null;
     var miniWatchdog = null;
@@ -108,6 +111,9 @@
         }
         miniItemId = null;
         miniToken = null;
+        miniOriginalUrl = null;
+        miniMediaSourceId = null;
+        miniSourceMode = 'mp4';
         miniDurationSeconds = NaN;
         miniRecoveryCount = 0;
         if (miniPlayer) {
@@ -146,7 +152,7 @@
 
     function absolutePosition(video, startSeconds) {
         var position = isFinite(video.currentTime) ? video.currentTime : 0;
-        return startSeconds > 30 && position >= startSeconds - 2 ? position : startSeconds + position;
+        return miniSourceMode === 'mp4' ? startSeconds + position : position;
     }
 
     function loadItemDuration(itemId, token) {
@@ -162,6 +168,9 @@
             if (lookup.status >= 200 && lookup.status < 300) {
                 try {
                     var item = JSON.parse(lookup.responseText);
+                    if (miniMediaSourceId === miniItemId && item.MediaSources && item.MediaSources.length) {
+                        miniMediaSourceId = item.MediaSources[0].Id;
+                    }
                     if (item.RunTimeTicks > 0) {
                         miniDurationSeconds = item.RunTimeTicks / 10000000;
                         report('item duration=' + Math.floor(miniDurationSeconds) + 's');
@@ -177,13 +186,34 @@
     }
 
     function recoverMiniStream(reason, position) {
+        if (miniSourceMode === 'mp4') {
+            report(reason + '; MP4 stream position cannot be verified for a restart');
+            return false;
+        }
         if (miniRecoveryCount >= 3 ||
             (isFinite(miniDurationSeconds) && position >= miniDurationSeconds - 5)) {
             report(reason + '; recovery limit or item end reached at ' + Math.floor(position) + 's');
             return false;
         }
+        if (position < miniStreamStartSeconds + 2) {
+            return fallbackMiniSource(reason + '; seek did not advance', miniStreamStartSeconds);
+        }
         miniRecoveryCount++;
         report(reason + '; resuming at ' + Math.floor(position) + 's');
+        startMiniStream(position, 350);
+        return true;
+    }
+
+    function fallbackMiniSource(reason, position) {
+        if (miniSourceMode === 'original') {
+            miniSourceMode = 'hls';
+        } else if (miniSourceMode === 'hls') {
+            miniSourceMode = 'mp4';
+        } else {
+            return false;
+        }
+        miniRecoveryCount++;
+        report(reason + '; trying ' + miniSourceMode + ' at ' + Math.floor(position) + 's');
         startMiniStream(position, 350);
         return true;
     }
@@ -194,9 +224,21 @@
         miniLastProgress = 0;
         miniLastProgressAt = Date.now();
         var startTicks = Math.floor(startSeconds * 10000000);
-        var streamUrl = '/Videos/' + encodeURIComponent(miniItemId) + '/stream.mp4' +
-            '?VideoCodec=h264&AudioCodec=aac&MaxWidth=640&api_key=' + encodeURIComponent(miniToken) +
-            '&StartTimeTicks=' + startTicks;
+        var streamUrl;
+        if (miniSourceMode === 'original') {
+            streamUrl = miniOriginalUrl;
+        } else if (miniSourceMode === 'hls') {
+            streamUrl = '/Videos/' + encodeURIComponent(miniItemId) + '/master.m3u8' +
+                '?VideoCodec=h264&AudioCodec=aac&MaxWidth=640&SegmentContainer=ts&api_key=' +
+                encodeURIComponent(miniToken);
+            if (miniMediaSourceId) {
+                streamUrl += '&MediaSourceId=' + encodeURIComponent(miniMediaSourceId);
+            }
+        } else {
+            streamUrl = '/Videos/' + encodeURIComponent(miniItemId) + '/stream.mp4' +
+                '?VideoCodec=h264&AudioCodec=aac&MaxWidth=640&api_key=' + encodeURIComponent(miniToken) +
+                '&StartTimeTicks=' + startTicks;
+        }
         var player = createMiniPlayer();
         var nextVideo = document.createElement('video');
         nextVideo.className = 'webos-mini-player-video';
@@ -208,11 +250,39 @@
         nextVideo.autoplay = false;
         nextVideo.controls = true;
         nextVideo.src = streamUrl;
+        nextVideo.onloadedmetadata = function () {
+            if (miniVideo !== nextVideo || miniSourceMode === 'mp4') {
+                return;
+            }
+            if (isFinite(nextVideo.duration) && nextVideo.duration > 0 &&
+                nextVideo.duration + 5 < startSeconds) {
+                fallbackMiniSource('source is shorter than the seek position', startSeconds);
+                return;
+            }
+            try {
+                nextVideo.currentTime = startSeconds;
+            } catch (error) {
+                fallbackMiniSource('source could not seek', startSeconds);
+            }
+        };
+        nextVideo.onseeked = function () {
+            if (miniVideo === nextVideo && miniSourceMode !== 'mp4') {
+                report('seeked to ' + Math.floor(nextVideo.currentTime) + 's');
+            }
+        };
         nextVideo.onplaying = function () {
             if (miniVideo === nextVideo) {
                 miniLastProgressAt = Date.now();
-                report('playing from ' + Math.floor(startSeconds) + 's; stream duration=' +
+                report('playing ' + miniSourceMode + ' at ' + Math.floor(absolutePosition(nextVideo, startSeconds)) +
+                    's (requested ' + Math.floor(startSeconds) + 's); duration=' +
                     (isFinite(nextVideo.duration) ? Math.floor(nextVideo.duration) : 'unknown') + 's');
+                if (miniSourceMode !== 'mp4') {
+                    setTimeout(function () {
+                        if (miniVideo === nextVideo && nextVideo.currentTime < startSeconds - 5) {
+                            fallbackMiniSource('source resumed at the wrong time', startSeconds);
+                        }
+                    }, 4000);
+                }
             }
         };
         nextVideo.onwaiting = function () {
@@ -235,7 +305,8 @@
                 var errorCode = nextVideo.error ? nextVideo.error.code : 'unknown';
                 var position = absolutePosition(nextVideo, startSeconds);
                 report('mini-player media error=' + errorCode + ' at ' + Math.floor(position) + 's');
-                if (!recoverMiniStream('media error ' + errorCode, position)) {
+                if (!fallbackMiniSource('media error ' + errorCode, Math.max(position, startSeconds)) &&
+                    !recoverMiniStream('media error ' + errorCode, position)) {
                     closeMiniPlayer();
                     report('mini-player could not recover from media error');
                 }
@@ -292,16 +363,20 @@
         }
 
         var startSeconds = isFinite(video.currentTime) ? Math.max(0, video.currentTime) : 0;
+        var source = video.currentSrc || video.src || '';
         closeMiniPlayer();
         miniItemId = itemId;
         miniToken = token;
+        miniOriginalUrl = /^(https?:\/\/|\/)/i.test(source) ? source : null;
+        miniMediaSourceId = queryValue(source, 'MediaSourceId') || itemId;
+        miniSourceMode = miniOriginalUrl ? 'original' : 'hls';
         miniDurationSeconds = isFinite(video.duration) && video.duration > 0 ? video.duration : NaN;
         loadItemDuration(itemId, token);
         startMiniStream(startSeconds, 350);
         var openedEvent = document.createEvent('Event');
         openedEvent.initEvent('webos-mini-player-opened', false, false);
         document.dispatchEvent(openedEvent);
-        report('Back: opening stream from ' + Math.floor(startSeconds) + 's');
+        report('Back: opening ' + miniSourceMode + ' from ' + Math.floor(startSeconds) + 's');
         miniWatchdog = setInterval(function () {
             if (!miniVideo || miniVideo.paused || miniVideo.ended) {
                 return;

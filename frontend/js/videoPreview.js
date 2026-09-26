@@ -211,7 +211,7 @@
         trickplayCanvas = canvas;
         document.body.appendChild(canvas);
 
-        // Start with the tenth thumbnail, then sample every fifth thumbnail.
+        // Start with the tenth thumbnail, then sample every twenties thumbnail.
         var firstFrame = info.ThumbnailCount >= 10 ? 9 : 0;
         var frameIndex = firstFrame;
         var tileIndex = -1;
@@ -292,13 +292,13 @@
 
         drawFrame();
         trickplayInterval = setInterval(function () {
-            frameIndex += 5;
+            frameIndex += 20;
             if (frameIndex >= info.ThumbnailCount) {
                 frameIndex = firstFrame;
             }
             drawFrame();
         }, 1000);
-        setStatus('showing every fifth trickplay thumbnail, starting at ten');
+        setStatus('showing every twenties trickplay thumbnail, starting at ten');
     }
 
     function playPreview(card, itemId, token) {
