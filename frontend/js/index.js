@@ -435,7 +435,7 @@ function loadUrl(url, success, failure) {
 function getTextToInject(success, failure) {
     var bundle = {};
 
-    var urls = ['js/webOS.js', 'js/videoPreview.js', 'css/webOS.css'];
+    var urls = ['js/webOS.js', 'js/videoPreview.js', 'js/miniPlayer.js', 'css/webOS.css'];
 
     // imitate promises as they're borked in at least WebOS 2
     var looper = function (idx) {
