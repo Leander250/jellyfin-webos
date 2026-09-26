@@ -12,7 +12,38 @@
     var imageContainer = null;
     var originalPosition = null;
     var previewDelay = 1000;
-    var previewStartTicks = 3000000000;
+    // Start at the beginning. Some standalone videos are shorter than the
+    // former five-minute offset and produced an empty video surface.
+    var previewStartTicks = 0;
+    var statusElement = null;
+
+    function setStatus(message) {
+        if (!statusElement) {
+            statusElement = document.createElement('div');
+            statusElement.id = 'webos-video-preview-status';
+            statusElement.style.position = 'fixed';
+            statusElement.style.right = '1em';
+            statusElement.style.bottom = '1em';
+            statusElement.style.zIndex = '2147483647';
+            statusElement.style.maxWidth = '70vw';
+            statusElement.style.padding = '0.45em 0.7em';
+            statusElement.style.borderRadius = '0.3em';
+            statusElement.style.background = 'rgba(0, 0, 0, 0.82)';
+            statusElement.style.color = '#ffffff';
+            statusElement.style.fontFamily = 'sans-serif';
+            statusElement.style.fontSize = '18px';
+            statusElement.style.lineHeight = '1.3';
+            statusElement.style.pointerEvents = 'none';
+            document.body.appendChild(statusElement);
+        }
+
+        statusElement.textContent = 'Preview debug: ' + message;
+        console.log('Preview debug: ' + message);
+        window.top.postMessage({
+            type: 'videoPreviewStatus',
+            data: message
+        }, '*');
+    }
 
     function getClosestCard(target) {
         if (!target || typeof target.closest !== 'function') {
@@ -70,12 +101,18 @@
         imageContainer = null;
         originalPosition = null;
         activeCard = null;
+        setStatus('idle');
     }
 
     function typeFromCard(card) {
         return card.getAttribute('data-type') ||
             (card.dataset && card.dataset.type) ||
             (card.getAttribute('data-item-type')) || '';
+    }
+
+    function isPreviewableType(itemType) {
+        itemType = String(itemType || '').toLowerCase();
+        return itemType === 'movie' || itemType === 'episode' || itemType === 'video';
     }
 
     function playPreview(card, itemId, token) {
@@ -103,7 +140,9 @@
         video.autoplay = true;
         video.muted = true;
         video.loop = true;
+        video.preload = 'auto';
         video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
         video.className = 'webos-video-preview-player';
         video.style.position = 'absolute';
         video.style.top = '0';
@@ -120,11 +159,18 @@
         video.oncanplay = function () {
             if (activeCard === card && previewPlayer === video) {
                 video.style.opacity = '1';
+                setStatus('buffered; waiting for playback');
+            }
+        };
+        video.onplaying = function () {
+            if (activeCard === card && previewPlayer === video) {
+                setStatus('playing preview');
             }
         };
         video.onerror = function () {
             if (previewPlayer === video) {
                 stopPreview();
+                setStatus('video stream failed');
             }
         };
 
@@ -138,17 +184,28 @@
                 }
             });
         }
+
+        setTimeout(function () {
+            if (activeCard === card && previewPlayer === video && video.paused) {
+                setStatus('playback did not start');
+            }
+        }, 3000);
     }
 
     function checkItemType(card, itemId, token) {
         var itemType = typeFromCard(card);
         if (itemType) {
-            if (itemType === 'Movie' || itemType === 'Episode') {
+            setStatus('card type: ' + itemType);
+            if (isPreviewableType(itemType)) {
+                setStatus('starting preview');
                 playPreview(card, itemId, token);
+            } else {
+                setStatus('skipping non-video card: ' + itemType);
             }
             return;
         }
 
+        setStatus('checking item type');
         request = new XMLHttpRequest();
         request.open('GET', '/Items/' + encodeURIComponent(itemId) + '?api_key=' + encodeURIComponent(token), true);
         request.onreadystatechange = function () {
@@ -156,14 +213,20 @@
                 var response = request;
                 request = null;
                 if (activeCard !== card || response.status < 200 || response.status >= 300) {
+                    setStatus('item lookup failed: HTTP ' + response.status);
                     return;
                 }
                 try {
                     var item = JSON.parse(response.responseText);
-                    if (item.Type === 'Movie' || item.Type === 'Episode') {
+                    setStatus('item type: ' + item.Type);
+                    if (isPreviewableType(item.Type)) {
+                        setStatus('starting preview');
                         playPreview(card, itemId, token);
+                    } else {
+                        setStatus('skipping non-video item: ' + item.Type);
                     }
                 } catch (error) {
+                    setStatus('item metadata could not be read');
                     console.warn('Video preview: could not read item metadata.', error);
                 }
             }
@@ -171,8 +234,7 @@
         request.send();
     }
 
-    function onFocusIn(event) {
-        var card = getClosestCard(event.target);
+    function selectCard(card) {
         if (!card) {
             if (activeCard) {
                 stopPreview();
@@ -190,9 +252,11 @@
         var itemId = card.getAttribute('data-id');
         if (!itemId) {
             stopPreview();
+            setStatus('selected card has no item ID');
             return;
         }
 
+        setStatus('selected item; waiting 1 second');
         previewTimer = setTimeout(function () {
             previewTimer = null;
             if (activeCard !== card) {
@@ -203,6 +267,7 @@
             if (!token) {
                 console.warn('Video preview: Jellyfin access token was not found.');
                 stopPreview();
+                setStatus('access token was not found');
                 return;
             }
 
@@ -210,7 +275,35 @@
         }, previewDelay);
     }
 
+    function onFocusIn(event) {
+        selectCard(getClosestCard(event.target));
+    }
+
+    function getSelectedCard() {
+        var focused = getClosestCard(document.activeElement);
+        if (focused) {
+            return focused;
+        }
+
+        // Some Jellyfin TV views update a selection class after processing the
+        // arrow-key event instead of moving browser focus immediately.
+        return document.querySelector('.card.focused, .card.focus, .card:focus');
+    }
+
+    function refreshSelection() {
+        selectCard(getSelectedCard());
+    }
+
     document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('keydown', function (event) {
+        if (event.keyCode < 37 || event.keyCode > 40) {
+            return;
+        }
+
+        // Jellyfin handles directional navigation after this listener runs.
+        // Recheck on the next event turn, after its selection has settled.
+        setTimeout(refreshSelection, 0);
+    }, true);
     document.addEventListener('focusout', function () {
         setTimeout(function () {
             if (!activeCard) {
@@ -225,4 +318,5 @@
 
     window.addEventListener('pagehide', stopPreview);
     window.addEventListener('beforeunload', stopPreview);
+    setStatus('script loaded; move selection to a card');
 })();

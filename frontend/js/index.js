@@ -458,52 +458,35 @@ function handoff(url, bundle) {
 
     stopDiscovery();
     document.querySelector('.container').style.display = 'none';
+    var injectionStatus = document.querySelector('#injectionStatus');
+    injectionStatus.textContent = 'Preview debug: wrapper loaded; waiting for Jellyfin';
+    injectionStatus.style.display = '';
 
     var contentFrame = document.querySelector('#contentFrame');
-    var contentWindow = contentFrame.contentWindow;
-
-    var timer;
+    var injectedDocument = null;
 
     function onLoad() {
-        clearInterval(timer);
-        contentFrame.contentDocument.removeEventListener('DOMContentLoaded', onLoad);
-        contentFrame.removeEventListener('load', onLoad);
+        var contentDocument = contentFrame.contentDocument;
+        if (!contentDocument || contentDocument === injectedDocument) {
+            return;
+        }
+        injectedDocument = contentDocument;
 
-        injectScriptText(contentFrame.contentDocument, 'window.AppInfo = ' + JSON.stringify(appInfo) + ';');
-        injectScriptText(contentFrame.contentDocument, 'window.DeviceInfo = ' + JSON.stringify(deviceInfo) + ';');
+        injectScriptText(contentDocument, 'window.AppInfo = ' + JSON.stringify(appInfo) + ';');
+        injectScriptText(contentDocument, 'window.DeviceInfo = ' + JSON.stringify(deviceInfo) + ';');
 
         if (bundle.js) {
-            injectScriptText(contentFrame.contentDocument, bundle.js);
+            injectScriptText(contentDocument, bundle.js);
         }
 
         if (bundle.css) {
-            injectStyleText(contentFrame.contentDocument, bundle.css);
+            injectStyleText(contentDocument, bundle.css);
         }
+        injectionStatus.textContent = 'Preview debug: Jellyfin document loaded; script injected';
     }
 
-    function onUnload() {
-        contentWindow.removeEventListener('unload', onUnload);
-
-        timer = setInterval(function () {
-            var contentDocument = contentFrame.contentDocument;
-
-            switch (contentDocument.readyState) {
-                case 'loading':
-                    clearInterval(timer);
-                    contentDocument.addEventListener('DOMContentLoaded', onLoad);
-                    break;
-
-                // In the case of "loading" is not caught
-                case 'interactive':
-                    onLoad();
-                    break;
-            }
-        }, 0);
-    }
-
-    contentWindow.addEventListener('unload', onUnload);
-
-    // In the case of "loading" and "interactive" are not caught
+    // Reinject into every document Jellyfin opens, including the one it uses
+    // when restoring an existing signed-in session.
     contentFrame.addEventListener('load', onLoad);
 
     contentFrame.style.display = '';
@@ -516,12 +499,18 @@ window.addEventListener('message', function (msg) {
     var contentFrame = document.querySelector('#contentFrame');
 
     switch (msg.type) {
+        case 'videoPreviewStatus':
+            var injectionStatus = document.querySelector('#injectionStatus');
+            injectionStatus.textContent = 'Preview debug: ' + msg.data;
+            injectionStatus.style.display = '';
+            break;
         case 'selectServer':
             startDiscovery();
             document.querySelector('.container').style.display = '';
             hideConnecting();
             contentFrame.style.display = 'none';
             contentFrame.src = '';
+            document.querySelector('#injectionStatus').style.display = 'none';
             break;
         case 'AppHost.exit':
             webOS.platformBack();
