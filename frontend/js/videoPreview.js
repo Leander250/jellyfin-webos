@@ -9,8 +9,6 @@
     var previewTimer = null;
     var request = null;
     var previewPlayer = null;
-    var imageContainer = null;
-    var originalPosition = null;
     var previewDelay = 1000;
     // Start at the beginning. Some standalone videos are shorter than the
     // former five-minute offset and produced an empty video surface.
@@ -94,12 +92,6 @@
             previewPlayer = null;
         }
 
-        if (imageContainer && originalPosition !== null) {
-            imageContainer.style.position = originalPosition;
-        }
-
-        imageContainer = null;
-        originalPosition = null;
         activeCard = null;
         setStatus('idle');
     }
@@ -130,11 +122,7 @@
             '?VideoCodec=h264&AudioCodec=aac&MaxWidth=400&api_key=' + encodeURIComponent(token) +
             '&StartTimeTicks=' + previewStartTicks;
 
-        originalPosition = container.style.position;
-        if (!originalPosition || originalPosition === 'static') {
-            container.style.position = 'relative';
-        }
-        imageContainer = container;
+        var bounds = container.getBoundingClientRect();
 
         video.src = streamUrl;
         video.autoplay = true;
@@ -144,21 +132,17 @@
         video.setAttribute('playsinline', '');
         video.setAttribute('webkit-playsinline', '');
         video.className = 'webos-video-preview-player';
-        video.style.position = 'absolute';
-        video.style.top = '0';
-        video.style.right = '0';
-        video.style.bottom = '0';
-        video.style.left = '0';
-        video.style.width = '100%';
-        video.style.height = '100%';
-        video.style.objectFit = 'cover';
-        video.style.zIndex = '10';
-        video.style.borderRadius = 'inherit';
-        video.style.transition = 'opacity 0.4s ease-in';
-        video.style.opacity = '0';
+        // webOS cannot reliably render video within a transformed or
+        // transparent ancestor. Jellyfin scales the focused card, so put the
+        // video directly on the document and match the card's screen bounds.
+        video.style.position = 'fixed';
+        video.style.top = bounds.top + 'px';
+        video.style.left = bounds.left + 'px';
+        video.style.width = bounds.width + 'px';
+        video.style.height = bounds.height + 'px';
+        video.style.zIndex = '11';
         video.oncanplay = function () {
             if (activeCard === card && previewPlayer === video) {
-                video.style.opacity = '1';
                 setStatus('buffered; waiting for playback');
             }
         };
@@ -175,7 +159,7 @@
         };
 
         previewPlayer = video;
-        container.appendChild(video);
+        document.body.appendChild(video);
         var playResult = video.play();
         if (playResult && typeof playResult.catch === 'function') {
             playResult.catch(function () {
