@@ -12,6 +12,8 @@
     var previewPlayer = null;
     var trickplayCanvas = null;
     var trickplayInterval = null;
+    var tileRequest = null;
+    var tileObjectUrl = null;
     var previewDelay = 1000;
     var previewStartTicks = 2400000000;
     var statusElement = null;
@@ -60,11 +62,20 @@
             var servers = credentials.Servers || [];
             var server;
             var i;
+            var j;
+            var addresses;
+            var address;
+            var pageUrl = window.location.href.toLowerCase();
 
             for (i = 0; i < servers.length; i++) {
                 server = servers[i];
-                if (server.AccessToken && (!server.ManualAddress || server.ManualAddress === window.location.origin)) {
-                    return server.AccessToken;
+                addresses = [server.ManualAddress, server.LocalAddress, server.RemoteAddress];
+                for (j = 0; j < addresses.length; j++) {
+                    address = String(addresses[j] || '').replace(/\/+$/, '').toLowerCase();
+                    if (server.AccessToken && address &&
+                        (pageUrl === address || pageUrl.indexOf(address + '/') === 0)) {
+                        return server.AccessToken;
+                    }
                 }
             }
 
@@ -78,6 +89,10 @@
     function isMiniPlayerActive() {
         var miniPlayer = document.getElementById('webos-mini-player');
         return !!miniPlayer && miniPlayer.style.display !== 'none';
+    }
+
+    function authorize(request, token) {
+        request.setRequestHeader('Authorization', 'MediaBrowser Token="' + token + '"');
     }
 
     function positionPreview(element, container) {
@@ -102,6 +117,16 @@
             var pendingRequest = request;
             request = null;
             pendingRequest.abort();
+        }
+
+        if (tileRequest) {
+            var pendingTile = tileRequest;
+            tileRequest = null;
+            pendingTile.abort();
+        }
+        if (tileObjectUrl) {
+            URL.revokeObjectURL(tileObjectUrl);
+            tileObjectUrl = null;
         }
 
         if (trickplayInterval) {
@@ -194,12 +219,30 @@
         var tile = null;
         var framesPerTile = info.TileWidth * info.TileHeight;
 
+        function failTrickplay(reason) {
+            if (activeCard !== card || trickplayCanvas !== canvas) {
+                return;
+            }
+            stopPreview();
+            activeCard = card;
+            startVideoFallback(card, itemId, token, reason);
+        }
+
         function drawFrame() {
             if (activeCard !== card || trickplayCanvas !== canvas) {
                 return;
             }
             var nextTileIndex = Math.floor(frameIndex / framesPerTile);
             if (nextTileIndex !== tileIndex) {
+                if (tileRequest) {
+                    var previousRequest = tileRequest;
+                    tileRequest = null;
+                    previousRequest.abort();
+                }
+                if (tileObjectUrl) {
+                    URL.revokeObjectURL(tileObjectUrl);
+                    tileObjectUrl = null;
+                }
                 tileIndex = nextTileIndex;
                 tile = new Image();
                 var loadingTile = tile;
@@ -209,17 +252,32 @@
                     }
                 };
                 loadingTile.onerror = function () {
-                    if (activeCard === card && trickplayCanvas === canvas) {
-                        stopPreview();
-                        activeCard = card;
-                        setStatus('trickplay image failed; using video fallback');
-                        startVideoFallback(card, itemId, token);
+                    failTrickplay('trickplay image could not be displayed');
+                };
+                var imageRequest = new XMLHttpRequest();
+                tileRequest = imageRequest;
+                imageRequest.open('GET', '/Videos/' + encodeURIComponent(itemId) +
+                    '/Trickplay/' + encodeURIComponent(info.Width) + '/' + tileIndex +
+                    '.jpg?MediaSourceId=' + encodeURIComponent(trickplay.sourceId), true);
+                imageRequest.responseType = 'blob';
+                authorize(imageRequest, token);
+                imageRequest.onreadystatechange = function () {
+                    if (tileRequest !== imageRequest || imageRequest.readyState !== 4) {
+                        return;
+                    }
+                    tileRequest = null;
+                    if (imageRequest.status < 200 || imageRequest.status >= 300 || !imageRequest.response) {
+                        failTrickplay('trickplay image HTTP ' + imageRequest.status);
+                        return;
+                    }
+                    try {
+                        tileObjectUrl = URL.createObjectURL(imageRequest.response);
+                        loadingTile.src = tileObjectUrl;
+                    } catch (error) {
+                        failTrickplay('trickplay image could not be opened');
                     }
                 };
-                loadingTile.src = '/Videos/' + encodeURIComponent(itemId) +
-                    '/Trickplay/' + encodeURIComponent(info.Width) + '/' + tileIndex +
-                    '.jpg?api_key=' + encodeURIComponent(token) +
-                    '&MediaSourceId=' + encodeURIComponent(trickplay.sourceId);
+                imageRequest.send();
                 return;
             }
             if (!tile || !tile.complete || !tile.naturalWidth) {
@@ -303,12 +361,12 @@
         }, 3000);
     }
 
-    function startVideoFallback(card, itemId, token) {
+    function startVideoFallback(card, itemId, token, reason) {
         if (isMiniPlayerActive()) {
-            setStatus('no trickplay; video preview skipped while mini-player is active');
+            setStatus((reason || 'no trickplay') + '; video preview skipped while mini-player is active');
             return;
         }
-        setStatus('no trickplay; starting video preview');
+        setStatus((reason || 'no trickplay') + '; starting video preview');
         playPreview(card, itemId, token);
     }
 
@@ -323,7 +381,8 @@
         var lookup = new XMLHttpRequest();
         request = lookup;
         lookup.open('GET', '/Items/' + encodeURIComponent(itemId) +
-            '?Fields=Trickplay&api_key=' + encodeURIComponent(token), true);
+            '?Fields=Trickplay', true);
+        authorize(lookup, token);
         lookup.onreadystatechange = function () {
             if (request !== lookup || lookup.readyState !== 4) {
                 return;
@@ -335,7 +394,7 @@
             if (lookup.status < 200 || lookup.status >= 300) {
                 setStatus('item lookup failed: HTTP ' + lookup.status);
                 if (isPreviewableType(itemType)) {
-                    startVideoFallback(card, itemId, token);
+                    startVideoFallback(card, itemId, token, 'item lookup HTTP ' + lookup.status);
                 }
                 return;
             }
@@ -355,7 +414,7 @@
                 setStatus('item metadata could not be read');
                 console.warn('Video preview: could not read item metadata.', error);
                 if (isPreviewableType(itemType)) {
-                    startVideoFallback(card, itemId, token);
+                    startVideoFallback(card, itemId, token, 'item metadata error');
                 }
             }
         };
