@@ -10,12 +10,13 @@
     var request = null;
     var previewPlayer = null;
     var previewDelay = 1000;
-    // Start at the beginning. Some standalone videos are shorter than the
-    // former five-minute offset and produced an empty video surface.
-    var previewStartTicks = 0;
+    var previewStartTicks = 2400000000;
     var statusElement = null;
 
     function setStatus(message) {
+        if (!window.WebOSPreviewDebug) {
+            return;
+        }
         if (!statusElement) {
             statusElement = document.createElement('div');
             statusElement.id = 'webos-video-preview-status';

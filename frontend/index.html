@@ -32,7 +32,14 @@
 						tabindex="1" value="1" />
 					<label for="auto_connect">Automatically connect on app launch.</label>
 				</div>
-				<button id="connect" type="button" onclick="return handleServerSelect();" tabindex="2">Connect</button>
+				<div class="checkbox-wrapper">
+					<input type="checkbox" id="preview_debug" name="preview_debug"
+						onclick="return handlePreviewDebugCheckbox(this, true);"
+						onkeydown="return handlePreviewDebugCheckbox(this, event);"
+						tabindex="2" value="1" />
+					<label for="preview_debug">Show preview diagnostics.</label>
+				</div>
+				<button id="connect" type="button" onclick="return handleServerSelect();" tabindex="3">Connect</button>
 				<ul id="serverlist"></ul>
 			</form>
 		</div>

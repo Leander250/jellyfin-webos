@@ -126,6 +126,18 @@ function handleCheckbox(elem, evt) {
     return false;
 }
 
+function isPreviewDebugEnabled() {
+    return storage.get('preview_debug', false) === 'true';
+}
+
+function handlePreviewDebugCheckbox(elem, evt) {
+    var result = handleCheckbox(elem, evt);
+    setTimeout(function () {
+        storage.set('preview_debug', String(elem.checked), false);
+    }, 0);
+    return result;
+}
+
 // Similar to jellyfin-web
 function generateDeviceId() {
     return btoa([navigator.userAgent, new Date().getTime()].join('|')).replace(/=/g, '1');
@@ -154,6 +166,7 @@ function navigationInit() {
 
 function Init() {
     appInfo.deviceId = getDeviceId();
+    document.querySelector('#preview_debug').checked = isPreviewDebugEnabled();
 
     webOS.fetchAppInfo(function (info) {
         if (info) {
@@ -460,8 +473,11 @@ function handoff(url, bundle) {
     stopDiscovery();
     document.querySelector('.container').style.display = 'none';
     var injectionStatus = document.querySelector('#injectionStatus');
-    injectionStatus.textContent = 'Preview debug: wrapper loaded; waiting for Jellyfin';
-    injectionStatus.style.display = '';
+    var previewDebugEnabled = isPreviewDebugEnabled();
+    if (previewDebugEnabled) {
+        injectionStatus.textContent = 'Preview debug: wrapper loaded; waiting for Jellyfin';
+        injectionStatus.style.display = '';
+    }
 
     var contentFrame = document.querySelector('#contentFrame');
     var injectedDocument = null;
@@ -475,6 +491,7 @@ function handoff(url, bundle) {
 
         injectScriptText(contentDocument, 'window.AppInfo = ' + JSON.stringify(appInfo) + ';');
         injectScriptText(contentDocument, 'window.DeviceInfo = ' + JSON.stringify(deviceInfo) + ';');
+        injectScriptText(contentDocument, 'window.WebOSPreviewDebug = ' + JSON.stringify(previewDebugEnabled) + ';');
 
         if (bundle.js) {
             injectScriptText(contentDocument, bundle.js);
@@ -483,7 +500,9 @@ function handoff(url, bundle) {
         if (bundle.css) {
             injectStyleText(contentDocument, bundle.css);
         }
-        injectionStatus.textContent = 'Preview debug: Jellyfin document loaded; script injected';
+        if (previewDebugEnabled) {
+            injectionStatus.textContent = 'Preview debug: Jellyfin document loaded; script injected';
+        }
     }
 
     // Reinject into every document Jellyfin opens, including the one it uses
@@ -501,6 +520,9 @@ window.addEventListener('message', function (msg) {
 
     switch (msg.type) {
         case 'videoPreviewStatus':
+            if (!isPreviewDebugEnabled()) {
+                break;
+            }
             var injectionStatus = document.querySelector('#injectionStatus');
             previewStatusHistory.push(msg.data);
             if (previewStatusHistory.length > 6) {
