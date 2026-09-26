@@ -8,6 +8,7 @@
 var curr_req = false;
 var server_info = false;
 var manifest = false;
+var previewStatusHistory = [];
 
 var appInfo = {
     deviceId: null,
@@ -501,7 +502,11 @@ window.addEventListener('message', function (msg) {
     switch (msg.type) {
         case 'videoPreviewStatus':
             var injectionStatus = document.querySelector('#injectionStatus');
-            injectionStatus.textContent = 'Preview debug: ' + msg.data;
+            previewStatusHistory.push(msg.data);
+            if (previewStatusHistory.length > 6) {
+                previewStatusHistory.shift();
+            }
+            injectionStatus.textContent = 'Preview debug:\n' + previewStatusHistory.join('\n');
             injectionStatus.style.display = '';
             break;
         case 'selectServer':
